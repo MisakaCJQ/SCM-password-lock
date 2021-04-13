@@ -1,0 +1,738 @@
+C51 COMPILER V9.52.0.0   PWLOCK                                                            09/16/2020 23:56:08 PAGE 1   
+
+
+C51 COMPILER V9.52.0.0, COMPILATION OF MODULE PWLOCK
+OBJECT MODULE PLACED IN pwlock.OBJ
+COMPILER INVOKED BY: H:\Keil\C51\BIN\C51.EXE pwlock.c BROWSE DEBUG OBJECTEXTEND TABS(2)
+
+line level    source
+
+   1          #include <STC15F2K60S2.h>
+   2          #include <intrins.h>
+   3          #define uint unsigned int
+   4          #define uchar unsigned char
+   5          
+   6          #define ADC_POWER 0x80      /*ADC电源开关*/
+   7          #define ADC_FLAG 0x10       /*当A/D转换完成后，ADC_FLAG要软件清零*/
+   8          #define ADC_START 0x08      /*当A/D转换完成后，cstAdcStart会自动清零，所以要开始下一�
+             -�转换，则需要置位*/
+   9          #define ADC_SPEED_90 0x60   /*ADC转换速度 90个时钟周期转换一次*/
+  10          #define ADC_CHS1_7 0x07     /*选择P1.7作为A/D输入*/
+  11          
+  12          
+  13          uchar i=0,blink=0;//i用于定时器中断当中数码管扫描的变量，blink用于250ms分频
+  14          uchar barCounter=0;//用于LED进度条显示时的分频
+  15          uchar barLedCounter=0;//用于LED进度条显示时切换数组元素
+  16          uchar flagblink=0;//用于记录闪烁位的翻转状态
+  17          uchar flagState=0;//状态标志，0代表锁定状态，1代表解锁状态，2代表设定密码状态
+  18          uchar flagBar=0;//用于进度条LED显示的标志位
+  19          uchar flagWrong=0;//标志输错密码
+  20          uchar flagBeep=0;//用于标志蜂鸣器工作
+  21          uchar wrongCounter=0;//用于错误时LED显示分频
+  22          uchar wrongLedCounter=0;//用于错误时选择LED显示
+  23          uchar segSelect[]={0x3f,0x06,0x5b,0x4f,0x66,0x6d,0x7d,0x07,0x7f,0x6f}; //段选信号，显示0-9
+  24          uchar digSelect[]={0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07};//位选信号，数码管0-7位
+  25          uchar progressBarLed[] = {0x00, 0x80, 0xc0, 0xe0, 0xf0, 0xf8, 0xfc, 0xfe, 0xff};//LED进度条
+  26          uchar wrongLed[]={0x00,0xaa,0x55};//密码错误时的三种LED显示
+  27          uchar segLine=0x40;//横杠段选信号
+  28          //uchar writePw[8]={0};//待写入的6位密码，仅有后6个数据有效
+  29          uchar readPw[8]={0};//读取出的6位密码
+  30          uchar pwshow[8]={0x0};//锁定状态数码管上显示的6位密码
+  31          uchar editBit=2;//当前编辑位，即右下角有点的位。
+  32          
+  33          sbit sbtLedSel = P2 ^ 3;//数码管和LED切换引脚
+  34          sbit sbtBeep = P3 ^ 4;//蜂鸣器引脚
+  35          sbit sbtKey1 = P3 ^ 2;//key1引脚
+  36          sbit sbtKey2 = P3 ^ 3;//key2引脚
+  37          sbit sbtKey3 = P1 ^ 7;//key3引脚
+  38          sbit SDA = P4 ^ 0;//I2C总线的数据线
+  39          sbit SCL = P5 ^ 5;//I2C总线的时钟线
+  40          sbit sbtIn =P1 ^ 0;//P1.0引脚，连接继电器输入。
+  41          
+  42          void Delay500ms()   //@11.0592MHz
+  43          {
+  44   1        unsigned char i, j, k;
+  45   1      
+  46   1        _nop_();
+  47   1        _nop_();
+  48   1        i = 22;
+  49   1        j = 3;
+  50   1        k = 227;
+  51   1        do
+  52   1        {
+  53   2          do
+  54   2          {
+C51 COMPILER V9.52.0.0   PWLOCK                                                            09/16/2020 23:56:08 PAGE 2   
+
+  55   3            while (--k);
+  56   3          } while (--j);
+  57   2        } while (--i);
+  58   1      }
+  59          
+  60          void Delay100ms()       //@11.0592MHz  延时100ms
+  61          {
+  62   1          unsigned char i, j, k;
+  63   1          _nop_();
+  64   1          _nop_();
+  65   1          i = 5;
+  66   1          j = 52;
+  67   1          k = 195;
+  68   1          do
+  69   1          {
+  70   2              do
+  71   2              {
+  72   3                  while ( --k );
+  73   3              }
+  74   2              while ( --j );
+  75   2          }
+  76   1          while ( --i );
+  77   1      }
+  78          
+  79          void Delay80ms()    //@11.0592MHz
+  80          {
+  81   1        unsigned char i, j, k;
+  82   1      
+  83   1        _nop_();
+  84   1        _nop_();
+  85   1        i = 4;
+  86   1        j = 93;
+  87   1        k = 155;
+  88   1        do
+  89   1        {
+  90   2          do
+  91   2          {
+  92   3            while (--k);
+  93   3          } while (--j);
+  94   2        } while (--i);
+  95   1      }
+  96          
+  97          void Delay10ms()    //@11.0592MHz
+  98          {
+  99   1        unsigned char i, j;
+ 100   1      
+ 101   1        i = 108;
+ 102   1        j = 145;
+ 103   1        do
+ 104   1        {
+ 105   2          while (--j);
+ 106   2        } while (--i);
+ 107   1      }
+ 108          
+ 109          void Delay5ms()     //@11.0592MHz  延时5ms
+ 110          {
+ 111   1          unsigned char i, j;
+ 112   1          i = 54;
+ 113   1          j = 199;
+ 114   1          do
+ 115   1          {
+ 116   2              while ( --j );
+C51 COMPILER V9.52.0.0   PWLOCK                                                            09/16/2020 23:56:08 PAGE 3   
+
+ 117   2          }
+ 118   1          while ( --i );
+ 119   1      }
+ 120          
+ 121          void Delay1ms()   //@11.0592MHz
+ 122          {
+ 123   1        unsigned char i, j;
+ 124   1      
+ 125   1        _nop_();
+ 126   1        _nop_();
+ 127   1        _nop_();
+ 128   1        i = 11;
+ 129   1        j = 190;
+ 130   1        do
+ 131   1        {
+ 132   2          while (--j);
+ 133   2        } while (--i);
+ 134   1      }
+ 135          
+ 136          void Delay4us()        //延时4us
+ 137          {
+ 138   1          ;;
+ 139   1      }
+ 140          
+ 141          void Delayms( uint n )
+ 142          {
+ 143   1          while( n )
+ 144   1          {
+ 145   2              uchar i, j;
+ 146   2              i = 11;
+ 147   2              j = 190;
+ 148   2              do
+ 149   2              {
+ 150   3                  while ( --j );
+ 151   3              }
+ 152   2              while ( --i );
+ 153   2              n--;
+ 154   2          }
+ 155   1      }
+ 156          /******************ADC导航按键部分***************************/
+ 157          /**************************************
+ 158           * 函数名：GetADC
+ 159           * 描述  ：获得AD转换的值,没有设置A/D转换中断（具体看IE、IP）
+ 160           * 输入  ：无
+ 161           * 输出  ：AD转换的结果
+ 162           **************************************/
+ 163          
+ 164          uchar GetADC()
+ 165          {
+ 166   1        unsigned char result;
+ 167   1        ADC_CONTR = ADC_POWER | ADC_START | ADC_SPEED_90 | ADC_CHS1_7;//没有将ADC_FLAG置1，用于判断A/D�
+             -�否结束
+ 168   1        _nop_();
+ 169   1        _nop_();
+ 170   1        _nop_();
+ 171   1        _nop_();
+ 172   1        while(!(ADC_CONTR&ADC_FLAG));//等待直到A/D转换结束
+ 173   1        ADC_CONTR &= ~ADC_FLAG; //ADC_FLAGE软件清0
+ 174   1        result = ADC_RES; //获取AD的值
+ 175   1        return result;    //返回ADC值
+ 176   1      }
+ 177          
+C51 COMPILER V9.52.0.0   PWLOCK                                                            09/16/2020 23:56:08 PAGE 4   
+
+ 178          /********************************
+ 179           * 函数名：NavKeycheck()     
+ 180           * 描述  ：检测功能键的上5、下2、左4、右1、确认键3、开关按键3（0），没按下�
+             -��回0x07，返回相应的值  (包含消抖过程)
+ 181           * 输入  ：无
+ 182           * 输出  ：键对应的值
+ 183          ********************************/
+ 184          uchar NavKeyCheck()
+ 185          {
+ 186   1        uchar key;
+ 187   1        key=GetADC();     //获得ADC值赋值给key
+ 188   1        if(key!=255)
+ 189   1        {
+ 190   2          Delay1ms();
+ 191   2          key=GetADC();
+ 192   2          if(key!=255)    //按键消抖
+ 193   2          {
+ 194   3              key=key&0xE0;//获取高3位，其他位清零
+ 195   3                key=_cror_(key,5);//循环右移5位
+ 196   3            return key;
+ 197   3          }
+ 198   2        }
+ 199   1        return 0x07;
+ 200   1      }
+ 201          
+ 202          void NavKey_Process()
+ 203          {
+ 204   1          uchar NavKeyCurrent;  //导航按键当前的状态
+ 205   1          uchar NavKeyPast;     //导航按键前一个状态
+ 206   1      
+ 207   1          NavKeyCurrent = NavKeyCheck();    //获取当前ADC值
+ 208   1          if( NavKeyCurrent != 0x07 )       //导航按键是否被按下 不等于0x07表示有按下
+ 209   1          {
+ 210   2              NavKeyPast = NavKeyCurrent;
+ 211   2              while( NavKeyCurrent != 0x07 )        //等待导航按键松开
+ 212   2                  NavKeyCurrent = NavKeyCheck();
+ 213   2              //松开后再对输入的信号处理
+ 214   2              switch( NavKeyPast )
+ 215   2              {
+ 216   3                  case 0x05 ://向上
+ 217   3                      if(pwshow[editBit]==9)
+ 218   3                          pwshow[editBit]=0;
+ 219   3                      else
+ 220   3                          pwshow[editBit]++;
+ 221   3                      break;
+ 222   3                  case 0x02 ://向下
+ 223   3                      if(pwshow[editBit]==0)
+ 224   3                          pwshow[editBit]=9;
+ 225   3                      else
+ 226   3                          pwshow[editBit]--;
+ 227   3                      break;
+ 228   3                  case 0x04 ://向左
+ 229   3                      if(editBit==2)
+ 230   3                          editBit=7;
+ 231   3                      else
+ 232   3                          editBit--;
+ 233   3                      break;
+ 234   3                  case 0x01 ://向右
+ 235   3                      if(editBit==7)
+ 236   3                          editBit=2;
+ 237   3                      else
+ 238   3                          editBit++;
+C51 COMPILER V9.52.0.0   PWLOCK                                                            09/16/2020 23:56:08 PAGE 5   
+
+ 239   3                      break;
+ 240   3                  case 0x03 ://中间
+ 241   3                      pwshow[editBit]=0;
+ 242   3                      break;
+ 243   3              }
+ 244   2          }
+ 245   1      
+ 246   1          //Delay100ms();
+ 247   1      }
+ 248          
+ 249          
+ 250          
+ 251          /**********************非易失存储器部分**************************/
+ 252          void IIC_init()     //I2C总线初始化
+ 253          {
+ 254   1          SCL = 1;
+ 255   1          Delay4us();
+ 256   1          SDA = 1;
+ 257   1          Delay4us();
+ 258   1      }
+ 259          
+ 260          void start()        //主机启动信号
+ 261          {
+ 262   1          SDA = 1;
+ 263   1          Delay4us();
+ 264   1          SCL = 1;
+ 265   1          Delay4us();
+ 266   1          SDA = 0;
+ 267   1          Delay4us();
+ 268   1      }
+ 269          
+ 270          void stop()         //停止信号
+ 271          {
+ 272   1          SDA = 0;
+ 273   1          Delay4us();
+ 274   1          SCL = 1;
+ 275   1          Delay4us();
+ 276   1          SDA = 1;
+ 277   1          Delay4us();
+ 278   1      }
+ 279          
+ 280          void respons()      //从机应答信号
+ 281          {
+ 282   1          uchar i = 0;
+ 283   1          SCL = 1;
+ 284   1          Delay4us();
+ 285   1          while( SDA == 1 && ( i < 255 ) ) //表示若在一段时间内没有收到从器件的应答则
+ 286   1              i++;                //主器件默认从期间已经收到数据而不再等待应答信号。
+ 287   1          SCL = 0;
+ 288   1          Delay4us();
+ 289   1      }
+ 290          
+ 291          void writebyte( uchar data0 )//对24C02写一个字节数据
+ 292          {
+ 293   1          uchar i, temp;
+ 294   1          temp = data0;
+ 295   1          for( i = 0; i < 8; i++ )
+ 296   1          {
+ 297   2              temp = temp << 1;
+ 298   2              SCL = 0;
+ 299   2              Delay4us();
+ 300   2              SDA = CY;
+C51 COMPILER V9.52.0.0   PWLOCK                                                            09/16/2020 23:56:08 PAGE 6   
+
+ 301   2              Delay4us();
+ 302   2              SCL = 1;
+ 303   2              Delay4us();
+ 304   2          }
+ 305   1          SCL = 0;
+ 306   1          Delay4us();
+ 307   1          SDA = 1;
+ 308   1          Delay4us();
+ 309   1      }
+ 310          uchar readbyte()            //从24C02读一个字节数据
+ 311          {
+ 312   1          uchar i, k;
+ 313   1          SCL = 0;
+ 314   1          Delay4us();
+ 315   1          SDA = 1;
+ 316   1          Delay4us();
+ 317   1          for( i = 0; i < 8; i++ )
+ 318   1          {
+ 319   2              SCL = 1;
+ 320   2              Delay4us();
+ 321   2              k = ( k << 1 ) | SDA;
+ 322   2              Delay4us();
+ 323   2              SCL = 0;
+ 324   2              Delay4us();
+ 325   2          }
+ 326   1          Delay4us();
+ 327   1          return k;
+ 328   1      }
+ 329          
+ 330          void write_add( uchar addr, uchar data0 ) //对24C02的地址addr，写入一个数据data0
+ 331          {
+ 332   1          start();
+ 333   1          writebyte( 0xa0 );
+ 334   1          respons();
+ 335   1          writebyte( addr );
+ 336   1          respons();
+ 337   1          writebyte( data0 );
+ 338   1          respons();
+ 339   1          stop();
+ 340   1      }
+ 341          uchar read_add( uchar addr )      //从24C02的addr地址，读一个字节数据
+ 342          {
+ 343   1          uchar data0;
+ 344   1          start();
+ 345   1          writebyte( 0xa0 );
+ 346   1          respons();
+ 347   1          writebyte( addr );
+ 348   1          respons();
+ 349   1          start();
+ 350   1          writebyte( 0xa1 );
+ 351   1          respons();
+ 352   1          data0 = readbyte();
+ 353   1          stop();
+ 354   1          return data0;
+ 355   1      }
+ 356          
+ 357          void init()//初始化
+ 358          {
+ 359   1          uchar j=0,data0=0x00;;
+ 360   1          //设定P0,P1.0,P2.3,P3.4推挽输出
+ 361   1          P0M1=0x00;
+ 362   1          P0M0=0xff;
+C51 COMPILER V9.52.0.0   PWLOCK                                                            09/16/2020 23:56:08 PAGE 7   
+
+ 363   1          P1M1=0x00;
+ 364   1          P1M0=0x01;
+ 365   1          P2M1=0x00;
+ 366   1          P2M0=0x08;
+ 367   1          P3M1 = 0x00;//蜂鸣器
+ 368   1          P3M0 = 0x10;
+ 369   1          
+ 370   1          //AD信号初始化部分
+ 371   1          P1ASF=0x80;//将P1ASF寄存器对应位置1
+ 372   1        ADC_RES = 0;//结果寄存器清零
+ 373   1          //ADC_RESL=0;
+ 374   1        ADC_CONTR = ADC_POWER | ADC_FLAG | ADC_START | ADC_SPEED_90 | ADC_CHS1_7;   //对应位赋值
+ 375   1        Delayms(2);
+ 376   1          
+ 377   1          /************定时器0设置******************/
+ 378   1          TMOD=0x01;        //定时器0，方式1。定时器1方式0，16位自动重装。
+ 379   1        EA=1;         //打开总的中断
+ 380   1        ET0=1;          //开启定时器0中断  
+ 381   1        TH0=(65535-1000)/256; //设置定时初值
+ 382   1        TL0=(65535-1000)%256;
+ 383   1        TR0=1;          //启动定时器
+ 384   1          /***********定时器1设置******************/
+ 385   1          AUXR |= 0x40;           //定时器1时钟1T模式
+ 386   1          ET1=1;          //开启定时器1中断
+ 387   1          TH1 = 0xF4;             //设置定时1初值
+ 388   1          TL1 = 0xCD;             //设置定时1初值
+ 389   1          TF1 = 0;                //清除TF1标志
+ 390   1          TR1 = 1;                //定时器1开始计时
+ 391   1      
+ 392   1          sbtLedSel=0;
+ 393   1          sbtBeep=0;
+ 394   1          sbtIn=0;
+ 395   1          P0=0x00;
+ 396   1      
+ 397   1          IIC_init();//IIC初始化
+ 398   1          for(j=0;j<8;j++)//从非易失存储器中读出密码
+ 399   1          {
+ 400   2              data0=read_add(j);
+ 401   2              readPw[j]=data0;
+ 402   2          }
+ 403   1      
+ 404   1          /*
+ 405   1          for(j=0;j<8;j++)
+ 406   1          {
+ 407   1              write_add(j,0x08);
+ 408   1              Delay10ms();
+ 409   1          }
+ 410   1          */
+ 411   1      }
+ 412          
+ 413          void timer0() interrupt 1
+ 414          {
+ 415   1          TH0=(65535-1000)/256;   //重新填充初值
+ 416   1        TL0=(65535-1000)%256;
+ 417   1      
+ 418   1          //NavKey_Process();//获取导航按键状态
+ 419   1          i++;
+ 420   1          if(i==8)
+ 421   1              i=0;
+ 422   1          
+ 423   1          if(flagState==0)//锁定状态
+ 424   1          {
+C51 COMPILER V9.52.0.0   PWLOCK                                                            09/16/2020 23:56:08 PAGE 8   
+
+ 425   2              //错误处理部分
+ 426   2              if(flagWrong==1)
+ 427   2              {
+ 428   3                  wrongCounter++;
+ 429   3                  if(wrongCounter==50)
+ 430   3                      wrongLedCounter=1;
+ 431   3                  else if(wrongCounter==100)
+ 432   3                      wrongLedCounter=2;
+ 433   3                  else if(wrongCounter==150)
+ 434   3                      wrongLedCounter=1;
+ 435   3                  else if(wrongCounter==200)
+ 436   3                      wrongLedCounter=2;
+ 437   3                  else if(wrongCounter==250)
+ 438   3                  {
+ 439   4                      wrongLedCounter=0;//LED停止显示
+ 440   4                      flagWrong=0;//关闭错误标志
+ 441   4                      wrongCounter=0;//错误分频归0
+ 442   4                  }
+ 443   3                  
+ 444   3              }
+ 445   2      
+ 446   2              //显示部分
+ 447   2              P0=0;
+ 448   2              sbtLedSel=0;
+ 449   2              P2=digSelect[i];
+ 450   2              if(i<2)//前两位显示横杠
+ 451   2                  P0=segLine;
+ 452   2              else
+ 453   2              {
+ 454   3                  if(i==editBit)
+ 455   3                      P0=segSelect[pwshow[i]] | 0x80;//编辑位加小数点
+ 456   3                  else
+ 457   3                      P0=segSelect[pwshow[i]];
+ 458   3                  //P0=segSelect[i+1];
+ 459   3              }
+ 460   2              Delay1ms();
+ 461   2      
+ 462   2              if(i==7&&flagWrong==1)
+ 463   2              {
+ 464   3                  P0=0;
+ 465   3                  sbtLedSel=1;
+ 466   3                  P0=wrongLed[wrongLedCounter];
+ 467   3                  Delay1ms();
+ 468   3              }
+ 469   2              
+ 470   2      
+ 471   2          }
+ 472   1          else if (flagState==1)//解锁状态
+ 473   1          {
+ 474   2              if(flagBar==0)//初次进入解锁状态
+ 475   2              {
+ 476   3                  barCounter++;
+ 477   3                  if (barCounter==20)//分频
+ 478   3                  {
+ 479   4                      if (barLedCounter==8)//进度条已显示完毕
+ 480   4                          flagBar=1;//将标志设为1
+ 481   4                      else
+ 482   4                          barLedCounter++;//否则就将显示的LED右移
+ 483   4                      barCounter=0;
+ 484   4                  }
+ 485   3              }
+ 486   2              
+C51 COMPILER V9.52.0.0   PWLOCK                                                            09/16/2020 23:56:08 PAGE 9   
+
+ 487   2              P0=0;
+ 488   2              sbtLedSel=0;
+ 489   2              P2=digSelect[i];
+ 490   2              P0=segLine;
+ 491   2              Delay1ms();
+ 492   2      
+ 493   2              if(i==7)
+ 494   2              {
+ 495   3                  P0=0;
+ 496   3                  sbtLedSel=1;
+ 497   3                  P0=progressBarLed[barLedCounter];
+ 498   3                  Delay1ms();
+ 499   3              }
+ 500   2              
+ 501   2          }
+ 502   1          else if(flagState==2)//修改状态
+ 503   1          {
+ 504   2              blink++;
+ 505   2              if(blink==100)
+ 506   2              {
+ 507   3                  blink=0;
+ 508   3                  if(flagblink==0)//翻转闪烁状态
+ 509   3                      flagblink=1;
+ 510   3                  else
+ 511   3                      flagblink=0;
+ 512   3              }
+ 513   2      
+ 514   2              barCounter++;
+ 515   2              if(barCounter==100)
+ 516   2              {
+ 517   3                  barCounter=0;
+ 518   3                  if(barLedCounter==0)
+ 519   3                      barLedCounter=8;
+ 520   3                  else
+ 521   3                      barLedCounter=0;
+ 522   3              }
+ 523   2      
+ 524   2              P0=0;
+ 525   2              sbtLedSel=0;
+ 526   2              P2=digSelect[i];
+ 527   2              if(i<2)//前两位显示横杠
+ 528   2              {
+ 529   3                  if(flagblink==1)
+ 530   3                      P0=segLine;
+ 531   3                  else
+ 532   3                      P0=0;
+ 533   3              }
+ 534   2              else
+ 535   2              {
+ 536   3                  if(i==editBit)
+ 537   3                      P0=segSelect[pwshow[i]] | 0x80;
+ 538   3                  else
+ 539   3                      P0=segSelect[pwshow[i]];
+ 540   3              }
+ 541   2              Delay1ms();
+ 542   2      
+ 543   2              if(i==7)
+ 544   2              {
+ 545   3                  P0=0;
+ 546   3                  sbtLedSel=1;
+ 547   3                  P0=progressBarLed[barLedCounter];
+ 548   3                  Delay1ms();
+C51 COMPILER V9.52.0.0   PWLOCK                                                            09/16/2020 23:56:08 PAGE 10  
+
+ 549   3              }
+ 550   2          }
+ 551   1          
+ 552   1          //Delay1ms();
+ 553   1      }
+ 554          
+ 555          void timer1() interrupt 3//定时器1
+ 556          {
+ 557   1          if(flagBeep)
+ 558   1              sbtBeep = ~sbtBeep;//产生方波使得蜂鸣器发声
+ 559   1          else
+ 560   1              sbtBeep = 0;//如果开关关闭,则蜂鸣器断电以保护蜂鸣器
+ 561   1      }
+ 562          
+ 563          void main()
+ 564          {
+ 565   1          uchar j=0;//用于写入或修改数据时在循环内的变量
+ 566   1          init();
+ 567   1        while(1)
+ 568   1          {
+ 569   2              if(flagState==0)//锁定状态
+ 570   2              {
+ 571   3                  NavKey_Process();//获取并处理导航按键状态
+ 572   3                  if(sbtKey1==0)//检测到key1按下
+ 573   3                  {
+ 574   4                      Delay5ms();//消抖
+ 575   4                      if(sbtKey1==0)
+ 576   4                      {
+ 577   5                          while( !sbtKey1 );//直到key1松开
+ 578   5                          if(pwshow[2]==readPw[2]&&pwshow[3]==readPw[3]&&pwshow[4]==readPw[4]&&
+ 579   5                          pwshow[5]==readPw[5]&&pwshow[6]==readPw[6]&&pwshow[7]==readPw[7])
+ 580   5                          {
+ 581   6                              barCounter=0;//将LED进度条分频变量归0
+ 582   6                              barLedCounter=0;//将LED进度条数组切换计数器归0
+ 583   6                              flagBar=0;//LED进度条初次显示标志归0
+ 584   6                              flagState=1;
+ 585   6                              /*********蜂鸣器提示部分*********/
+ 586   6                              TH1=0xef;
+ 587   6                              TR0=0;
+ 588   6                              P0=0;//清除数码管
+ 589   6                              flagBeep=1;
+ 590   6                              Delay80ms();
+ 591   6                              flagBeep=0;
+ 592   6                              Delay80ms();
+ 593   6                              flagBeep=1;
+ 594   6                              Delay80ms();
+ 595   6                              flagBeep=0;
+ 596   6                              TR0=1;
+ 597   6      
+ 598   6                              sbtIn=1;//继电器输入高电平
+ 599   6                          }
+ 600   5                          else
+ 601   5                          {
+ 602   6                              flagState=0;
+ 603   6                              wrongCounter=0;//错误LED分频归0
+ 604   6                              wrongLedCounter=0;//错误LED选择归0
+ 605   6                              flagWrong=1;//错误标志置1
+ 606   6                              /*********蜂鸣器提示部分*********/
+ 607   6                              TH1=0xe5;
+ 608   6                              TR0=0;
+ 609   6                              P0=0;
+ 610   6                              flagBeep=1;
+C51 COMPILER V9.52.0.0   PWLOCK                                                            09/16/2020 23:56:08 PAGE 11  
+
+ 611   6                              Delay500ms();
+ 612   6                              flagBeep=0;
+ 613   6                              TR0=1;
+ 614   6                          }
+ 615   5                              
+ 616   5                      }
+ 617   4                  }
+ 618   3              }
+ 619   2              else if(flagState==1)//解锁状态
+ 620   2              {
+ 621   3                  if(sbtKey1==0)//检测到key1按下，重新锁定
+ 622   3                  {
+ 623   4                      Delay5ms();//消抖
+ 624   4                      if(sbtKey1==0)//重新锁定
+ 625   4                      {
+ 626   5                          while( !sbtKey1 );//直到key1松开
+ 627   5                          for(j=2;j<8;j++)//将显示密码清空
+ 628   5                              pwshow[j]=0;
+ 629   5                          editBit=2;//编辑位小数点复位
+ 630   5                          flagState=0;//改回锁定状态
+ 631   5                          sbtIn=0;//继电器输入低电平
+ 632   5                          flagBar=0;//LED进度条初次显示标志归0
+ 633   5                          barLedCounter=0;//将LED进度条数组切换计数器归0
+ 634   5                          barCounter=0;//将LED进度条分频变量归0
+ 635   5                          //flagBeep=0;
+ 636   5                          
+ 637   5                      }
+ 638   4                  }
+ 639   3                  if(sbtKey2==0)//检测到key2按下，进入修改密码状态
+ 640   3                  {
+ 641   4                      Delay5ms();//消抖
+ 642   4                      if(sbtKey2==0)
+ 643   4                      {
+ 644   5                          while( !sbtKey2 );//直到key2松开
+ 645   5                          editBit=2;//编辑位小数点复位
+ 646   5                          flagState=2;//进入修改密码状态
+ 647   5                          barLedCounter=0;//将LED进度条数组切换计数器归0
+ 648   5                          barCounter=0;//将LED进度条分频变量归0
+ 649   5                      }
+ 650   4                  }
+ 651   3              }
+ 652   2              else if(flagState==2)//修改状态
+ 653   2              {
+ 654   3                  NavKey_Process();//获取并处理导航按键状态
+ 655   3                  if(sbtKey1==0)//检测到key1按下，保存修改
+ 656   3                  {
+ 657   4                      Delay5ms();//消抖
+ 658   4                      if(sbtKey1==0)
+ 659   4                      {
+ 660   5                          while( !sbtKey1 );//直到key1松开
+ 661   5                          for(j=2;j<8;j++)//将密码逐位写入非易失存储器
+ 662   5                          {
+ 663   6                              write_add(j,pwshow[j]);
+ 664   6                              Delay10ms();
+ 665   6                              readPw[j]=pwshow[j];
+ 666   6                              //pwshow[j]=0x0;
+ 667   6                          }
+ 668   5                          flagState=1;//改回解锁状态
+ 669   5                          barLedCounter=8;//将LED进度条数组切换计数器归0
+ 670   5                          barCounter=0;//将LED进度条分频变量归0
+ 671   5                      }
+ 672   4                  }
+C51 COMPILER V9.52.0.0   PWLOCK                                                            09/16/2020 23:56:08 PAGE 12  
+
+ 673   3                  if (sbtKey2==0)//检测到key2按下，不保存修改
+ 674   3                  {
+ 675   4                      Delay5ms();//消抖
+ 676   4                      if(sbtKey2==0)
+ 677   4                      {
+ 678   5                          while( !sbtKey2 );//直到key1松开
+ 679   5                          flagState=1;//改回解锁状态
+ 680   5                          barLedCounter=8;//将LED进度条数组切换计数器归0
+ 681   5                          barCounter=0;//将LED进度条分频变量归0
+ 682   5                      }
+ 683   4                  }
+ 684   3              }
+ 685   2              else
+ 686   2              {
+ 687   3                  flagState=0;
+ 688   3              }
+ 689   2          }
+ 690   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   1259    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     59       2
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

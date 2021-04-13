@@ -1,0 +1,4 @@
+"STARTUP.obj",
+"pwlock.obj" 
+TO "pwlock" 
+RAMSIZE(256) 
